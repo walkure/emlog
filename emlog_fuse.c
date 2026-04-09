@@ -48,6 +48,8 @@
 #include <sys/capability.h>
 #endif
 
+#include <linux/capability.h>
+
 #include "emlog_ioctl.h"
 
 /* ------------------------------------------------------------------ */
@@ -59,10 +61,6 @@
 #define DEFAULT_BUF_KB  128
 #define DEFAULT_DEV_DIR "/dev/.emlog_fuse_devs"
 #define DEV_PREFIX_LEN  80
-
-/* linux/capability.h values */
-#define MY_CAP_CHOWN  0
-#define MY_CAP_MKNOD  27
 
 /* ------------------------------------------------------------------ */
 /* Data structures                                                     */
@@ -872,7 +870,7 @@ static int preflight(int needs_chown)
                 geteuid());
         int ok = 1;
 
-        if (check_capability(MY_CAP_MKNOD))
+        if (check_capability(CAP_MKNOD))
             fprintf(stderr, "  CAP_MKNOD: OK\n");
         else {
             fprintf(stderr, "  CAP_MKNOD: MISSING — required for mknod\n");
@@ -880,7 +878,7 @@ static int preflight(int needs_chown)
         }
 
         if (needs_chown) {
-            if (check_capability(MY_CAP_CHOWN))
+            if (check_capability(CAP_CHOWN))
                 fprintf(stderr, "  CAP_CHOWN: OK\n");
             else
                 fprintf(stderr, "  CAP_CHOWN: MISSING — chown may fail (warning)\n");

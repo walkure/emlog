@@ -12,10 +12,12 @@
 #include <linux/types.h>
 #else
 #include <sys/ioctl.h>
+#ifndef _LINUX_TYPES_H
 #include <stdint.h>
 typedef uint32_t __u32;
 typedef uint64_t __u64;
 typedef int32_t  __s32;
+#endif
 #endif
 
 #define EMLOG_IOCTL_MAGIC  'E'

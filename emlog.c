@@ -116,21 +116,26 @@ static struct emlog_info *get_einfo(const struct inode *inode)
     return NULL;
 }
 
-/* create a new emlog buffer and its associated info structure.
- * returns an errno on failure, or 0 on success.  on success, the
- * pointer to the new struct is passed back using peinfo */
-static int create_einfo(const struct inode *inode, int minor,
-                        struct emlog_info **peinfo)
+/* ========== race condition fixes ========== */
+/* to prevent race conditions in the emlog_info_list, we:
+ * 1. protect list operations with emlog_list_lock spinlock
+ * 2. perform memory allocation outside the lock (vmalloc/vfree may sleep)
+ * 3. use double-checked locking pattern in emlog_open
+ */
+static DEFINE_SPINLOCK(emlog_list_lock);
+
+/* allocate a new emlog_info structure and its buffer, but do not add to list.
+ * must be called outside lock since vmalloc may sleep.
+ * returns pointer on success, or ERR_PTR on failure. */
+static struct emlog_info *alloc_einfo(const struct inode *inode, int minor)
 {
     struct emlog_info *einfo;
 
-    /* make sure the memory requirement is legal */
     if (minor < 1 || minor > emlog_max_size)
-        return -EINVAL;
+        return ERR_PTR(-EINVAL);
 
-    /* allocate space for our metadata and initialize it */
     if ((einfo = kzalloc(sizeof(struct emlog_info), GFP_KERNEL)) == NULL)
-        goto struct_malloc_failed;
+        return ERR_PTR(-ENOMEM);
 
     einfo->i_ino = inode->i_ino;
     einfo->i_rdev = inode->i_rdev;
@@ -138,63 +143,51 @@ static int create_einfo(const struct inode *inode, int minor,
     init_waitqueue_head(EMLOG_READQ(einfo));
     rwlock_init(&einfo->rwlock);
 
-    /* figure out how much of a buffer this should be and allocate the buffer */
     einfo->size = 1024 * minor;
-    if ((einfo->data = vmalloc(sizeof(char) * einfo->size)) == NULL)
-        goto data_malloc_failed;
-
-    /* add it to our linked list */
-    einfo->next = emlog_info_list;
-    emlog_info_list = einfo;
-
-    if (emlog_debug)
-        pr_debug("allocating resources associated with inode %ld.\n", einfo->i_ino);
-
-    /* pass the struct back */
-    *peinfo = einfo;
-    return 0;
-
-#if 0
-  other_failure:               /* if we check for other errors later, jump here */
-#endif
-    vfree(einfo->data);
-  data_malloc_failed:
-    kfree(einfo);
-  struct_malloc_failed:
-    return -ENOMEM;
-}
-
-/* this frees all data associated with an emlog_info buffer, including
- * the struct that you pass to the function.  don't dereference this
- * structure after calling free_einfo! */
-static void free_einfo(struct emlog_info *einfo)
-{
-    struct emlog_info **ptr;
-
-    if (einfo == NULL) {
-        pr_err("null passed to free_einfo.\n");
-        return;
+    if ((einfo->data = vmalloc(sizeof(char) * einfo->size)) == NULL) {
+        kfree(einfo);
+        return ERR_PTR(-ENOMEM);
     }
 
     if (emlog_debug)
-        pr_debug("freeing resources associated with inode %ld.\n", einfo->i_ino);
+        pr_debug("allocated einfo for inode %ld.\n", einfo->i_ino);
 
-    vfree(einfo->data);
+    return einfo;
+}
 
-    /* now delete the 'einfo' structure from the linked list.  'ptr' is
-     * the pointer that needs to be changed... which is either the list
-     * head or one of the 'next' pointers on the list. */
+/* add einfo to the global list.  must be called while holding emlog_list_lock. */
+static void insert_einfo(struct emlog_info *einfo)
+{
+    einfo->next = emlog_info_list;
+    emlog_info_list = einfo;
+}
+
+/* remove einfo from the global list.  must be called while holding emlog_list_lock. */
+static void detach_einfo(struct emlog_info *einfo)
+{
+    struct emlog_info **ptr;
+
     ptr = &emlog_info_list;
     while (*ptr != einfo) {
         if (!*ptr) {
             pr_err("corrupt einfo list.\n");
-            break;
-        } else
-            ptr = &((**ptr).next);
-
+            return;
+        }
+        ptr = &((**ptr).next);
     }
     *ptr = einfo->next;
+}
 
+/* free all memory associated with an emlog_info structure.
+ * must be called outside lock since vfree may sleep.
+ * don't dereference einfo after calling this! */
+static void destroy_einfo(struct emlog_info *einfo)
+{
+    if (emlog_debug)
+        pr_debug("freeing resources associated with inode %ld.\n",
+                 einfo->i_ino);
+    vfree(einfo->data);
+    kfree(einfo);
 }
 
 /************************ File Interface Functions ************************/
@@ -202,25 +195,45 @@ static void free_einfo(struct emlog_info *einfo)
 static int emlog_open(struct inode *inode, struct file *file)
 {
     int minor = MINOR(inode->i_rdev);
+    struct emlog_info *einfo;
+    struct emlog_info *new_einfo = NULL;
 
-    struct emlog_info *einfo = NULL;
-    int retval;
-
-    if ((einfo = get_einfo(inode)) == NULL) {
-        /* never heard of this inode before... create a new record */
-        if ((retval = create_einfo(inode, minor, &einfo)) < 0)
-            return retval;
-    }
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(inode);
+    spin_unlock(&emlog_list_lock);
 
     if (einfo == NULL) {
-        pr_err("can not fetch einfo for inode %ld.\n", inode->i_ino);
-        return -EIO;
+        /* never heard of this inode before... create a new record.
+         * allocate outside lock since vmalloc may sleep. */
+        new_einfo = alloc_einfo(inode, minor);
+        if (IS_ERR(new_einfo))
+            return PTR_ERR(new_einfo);
+
+        spin_lock(&emlog_list_lock);
+        /* double-check locking: another thread may have created it while we were allocating */
+        einfo = get_einfo(inode);
+        if (einfo == NULL) {
+            insert_einfo(new_einfo);
+            einfo = new_einfo;
+            new_einfo = NULL;
+        }
+        einfo->refcount++;
+        spin_unlock(&emlog_list_lock);
+
+        /* if we lost the race, free our unused allocation */
+        if (new_einfo != NULL)
+            destroy_einfo(new_einfo);
+    } else {
+        spin_lock(&emlog_list_lock);
+        einfo->refcount++;
+        spin_unlock(&emlog_list_lock);
     }
 
-    einfo->refcount++;
     if (!try_module_get(THIS_MODULE)) {
         pr_err("cannot get module\n");
+        spin_lock(&emlog_list_lock);
         einfo->refcount--;
+        spin_unlock(&emlog_list_lock);
         return -ENODEV;
     }
     return 0;
@@ -230,26 +243,42 @@ static int emlog_open(struct inode *inode, struct file *file)
 static int emlog_release(struct inode *inode, struct file *file)
 {
     struct emlog_info *einfo;
-    int retval = 0;
+    struct emlog_info *to_free = NULL;
 
-    /* get the buffer info */
-    if ((einfo = get_einfo(inode)) == NULL) {
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(inode);
+    if (einfo == NULL) {
+        spin_unlock(&emlog_list_lock);
         pr_err("can not fetch einfo for inode %ld.\n", inode->i_ino);
-        retval = EIO; goto out;
+        module_put(THIS_MODULE);
+        return EIO;
     }
 
-    /* decrement the reference count.  if no one has this file open and
-     * it's not holding any data or if autofree is set, delete the
-     * record. */
     einfo->refcount--;
 
-    if (einfo->refcount == 0 && (emlog_autofree || EMLOG_QLEN(einfo) == 0))
-        free_einfo(einfo);
+    /* decrement the reference count.  if no one has this file open and
+     * it's not holding any data or if autofree is set, delete the record. */
+    if (einfo->refcount == 0) {
+        int qlen;
+        /* check buffer length under read lock */
+        read_lock(&einfo->rwlock);
+        qlen = EMLOG_QLEN(einfo);
+        read_unlock(&einfo->rwlock);
+        
+        if (emlog_autofree || qlen == 0) {
+            detach_einfo(einfo);
+            to_free = einfo;
+        }
+    }
+    spin_unlock(&emlog_list_lock);
 
-  out:
+    if (to_free)
+        destroy_einfo(to_free);
+
     module_put(THIS_MODULE);
-    return retval;
+    return 0;
 }
+
 
 /* read_from_emlog reads bytes out of a circular buffer with
  * wraparound.  returns char * pointer to data read, which the
@@ -323,11 +352,15 @@ static ssize_t emlog_read(struct file *file, char __user *buffer,      /* The bu
     char *data_to_return;
     struct emlog_info *einfo;
 
-    if (emlog_debug)
-        pr_debug("\nLength: %zu\nOffset: %lld\n", length, *offset);
     /* get the metadata about this emlog */
-    if ((einfo = get_einfo(file->f_path.dentry->d_inode)) == NULL) {
-        pr_err("can not fetch einfo for inode %ld.\n", (long)(file->f_path.dentry->d_inode->i_ino));
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(file->f_path.dentry->d_inode);
+    spin_unlock(&emlog_list_lock);
+    /* safe to use einfo outside lock: it won't be freed while refcount > 0 */
+
+    if (einfo == NULL) {
+        pr_err("can not fetch einfo for inode %ld.\n",
+               (long)(file->f_path.dentry->d_inode->i_ino));
         return -EIO;
     }
 
@@ -407,18 +440,18 @@ static ssize_t emlog_write(struct file *file,
     size_t n;
     struct emlog_info *einfo;
 
-    if (emlog_debug)
-        pr_debug("\nLength: %zu\nOffset: %lld\n", length, *offset);
-
     /* get the metadata about this emlog */
-    if ((einfo = get_einfo(file->f_path.dentry->d_inode)) == NULL)
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(file->f_path.dentry->d_inode);
+    spin_unlock(&emlog_list_lock);
+
+    if (einfo == NULL)
         return -EIO;
 
     /* if the message is longer than the buffer, just take the beginning
      * of it, in hopes that the reader (if any) will have time to read
      * before we wrap around and obliterate it */
     n = min(length, einfo->size - 1);
-
 
     /* make sure we have the memory for it */
     if ((message = kmalloc(n, GFP_KERNEL)) == NULL)
@@ -442,12 +475,17 @@ static ssize_t emlog_write(struct file *file,
     return n;
 }
 
-static unsigned int emlog_poll(struct file *file, struct poll_table_struct * wait)
+static unsigned int emlog_poll(struct file *file,
+                               struct poll_table_struct *wait)
 {
     struct emlog_info *einfo;
 
     /* get the metadata about this emlog */
-    if ((einfo = get_einfo(file->f_path.dentry->d_inode)) == NULL)
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(file->f_path.dentry->d_inode);
+    spin_unlock(&emlog_list_lock);
+
+    if (einfo == NULL)
         return -EIO;
 
     poll_wait(file, EMLOG_READQ(einfo), wait);
@@ -533,9 +571,19 @@ static int __init emlog_init(void)
 
 static void __exit emlog_remove(void)
 {
-    /* clean up any still-allocated memory */
-    while (emlog_info_list != NULL)
-        free_einfo(emlog_info_list);
+    struct emlog_info *to_free;
+
+    /* clean up any still-allocated einfo structures.
+     * lock/unlock around each destroy to avoid sleeping in spinlock. */
+    spin_lock(&emlog_list_lock);
+    while (emlog_info_list != NULL) {
+        to_free = emlog_info_list;
+        detach_einfo(to_free);
+        spin_unlock(&emlog_list_lock);
+        destroy_einfo(to_free);
+        spin_lock(&emlog_list_lock);
+    }
+    spin_unlock(&emlog_list_lock);
 
     device_destroy(emlog_class, emlog_dev_type);
     class_destroy(emlog_class);

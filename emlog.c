@@ -81,6 +81,7 @@
 #endif
 
 #include "emlog.h"
+#include "emlog_ioctl.h"
 
 static bool emlog_autofree = true;
 static bool emlog_debug;
@@ -496,12 +497,50 @@ static unsigned int emlog_poll(struct file *file,
         return 0;
 }
 
+
+static long emlog_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct emlog_info *einfo;
+    struct emlog_status st;
+
+    /* get the metadata about this emlog */
+    spin_lock(&emlog_list_lock);
+    einfo = get_einfo(file->f_path.dentry->d_inode);
+    spin_unlock(&emlog_list_lock);
+
+    if (einfo == NULL)
+        return -EIO;
+
+    switch (cmd) {
+    case EMLOG_GET_STATUS:
+        /* refcount is protected by emlog_list_lock */
+        spin_lock(&emlog_list_lock);
+        st.refcount = (__s32)einfo->refcount;
+        spin_unlock(&emlog_list_lock);
+
+        /* buffer-related fields are protected by rwlock */
+        read_lock(&einfo->rwlock);
+        st.buf_size      = (__u32)einfo->size;
+        st.data_len      = (__u32)EMLOG_QLEN(einfo);
+        st.total_written = (__u64)(einfo->offset + EMLOG_QLEN(einfo));
+        read_unlock(&einfo->rwlock);
+
+        if (copy_to_user((void __user *)arg, &st, sizeof(st)))
+            return -EFAULT;
+        return 0;
+
+    default:
+        return -ENOTTY;
+    }
+}
+
 static const struct file_operations emlog_fops = {
     .read = emlog_read,
     .write = emlog_write,
     .open = emlog_open,
     .release = emlog_release,
     .poll = emlog_poll,
+    .unlocked_ioctl  = emlog_ioctl,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
     /* no_llseek by default introduced at v2.6.37-rc1 and
      * removed in 6.12.0

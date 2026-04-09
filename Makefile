@@ -14,16 +14,18 @@ MVER := 0.70
 
 DKMS ?= dkms
 
+CROSS_COMPILE ?=
+CC := $(CROSS_COMPILE)gcc
 CFLAGS ?= -Wall -O2
 BINDIR ?= $(DESTDIR)/usr/bin
 
-.PHONY: modules modules_install modules_clean nbcat_install nbcat_clean mkemlog_install mkemlog_clean dkms_install dkms_remove
+.PHONY: modules modules_install modules_clean nbcat_install nbcat_clean mkemlog_install mkemlog_clean emlog_stat_install emlog_stat_clean dkms_install dkms_remove
 
-all: modules nbcat mkemlog
+all: modules nbcat mkemlog emlog_stat
 
-install: modules_install nbcat_install mkemlog_install
+install: modules_install nbcat_install mkemlog_install emlog_stat_install
 
-clean: modules_clean nbcat_clean mkemlog_clean
+clean: modules_clean nbcat_clean mkemlog_clean emlog_stat_clean
 
 modules:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
@@ -41,6 +43,9 @@ nbcat: nbcat.c
 mkemlog: mkemlog.c
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
+emlog_stat: emlog_stat.c
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
 nbcat_install: nbcat
 	install -m 0755 -d '$(BINDIR)'
 	install -m 0755 -s -t '$(BINDIR)' nbcat
@@ -48,6 +53,13 @@ nbcat_install: nbcat
 mkemlog_install: mkemlog
 	install -m 0755 -d '$(BINDIR)'
 	install -m 0755 -s -t '$(BINDIR)' mkemlog
+
+emlog_stat_install: emlog_stat
+	install -m 0755 -d '$(BINDIR)'
+	install -m 0755 -s -t '$(BINDIR)' emlog_stat
+
+emlog_stat_clean:
+	rm -f emlog_stat
 
 nbcat_clean:
 	rm -f nbcat

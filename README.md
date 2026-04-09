@@ -58,8 +58,18 @@ How is emlog used?
    make KDIR=/usr/src/linux
    ```
 
-   Two files should be generated: the kernel module itself (`emlog.ko`),
-   and the `nbcat` utility that will be described later.
+   For cross-compilation (e.g., for ARM targets), specify CROSS_COMPILE:
+   ```bash
+   make CROSS_COMPILE=arm-linux-gnueabihf-
+   ```
+
+   Or combine with KDIR/KVER for kernel module compilation:
+   ```bash
+   make KDIR=/path/to/kernel ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+   ```
+
+   Three files should be generated: the kernel module itself (`emlog.ko`),
+   and two utilities (`nbcat` and `emlog_stat`) that will be described later.
    You can use them directly from the current directory or you can install them via
    ```bash
    make install
@@ -226,6 +236,18 @@ in `/tmp`.
 Alternatively, you can use `dd` for that
    ```bash
    dd if=/var/log/emlog-device-instance of=/tmp/saved-log-file bs=4096 iflag=nonblock 2>/dev/null
+   ```
+
+* A utility `emlog_stat` is included to query buffer status via ioctl.
+This utility displays buffer size, current data length, total bytes
+written, and the number of open file descriptors.  For example:
+   ```bash
+   emlog_stat /tmp/testlog
+   ```
+...will display the current status of the emlog device.  You can query
+multiple devices at once:
+   ```bash
+   emlog_stat /tmp/testlog /dev/emlog
    ```
 
 

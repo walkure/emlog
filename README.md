@@ -70,6 +70,7 @@ How is emlog used?
 
    Three files should be generated: the kernel module itself (`emlog.ko`),
    and two utilities (`nbcat` and `emlog_stat`) that will be described later.
+   If libfuse is available, `emlog_fuse` will also be built automatically.
    You can use them directly from the current directory or you can install them via
    ```bash
    make install
@@ -249,6 +250,81 @@ multiple devices at once:
    ```bash
    emlog_stat /tmp/testlog /dev/emlog
    ```
+
+
+emlog_fuse
+==========
+
+`emlog_fuse` is a FUSE filesystem that transparently redirects file
+writes to emlog circular buffer devices.  Any file created under the
+mount point is automatically backed by an emlog kernel buffer.
+This allows applications to write logs to a regular path without
+any code changes, while the actual storage is a fixed-size circular
+buffer managed by the emlog kernel module.
+
+### Build requirements
+
+* `libfuse-dev` (libfuse2, FUSE 2.6+)
+* `libcap-dev` (optional, for non-root capability checks)
+
+If libfuse is available, `emlog_fuse` is built automatically as part
+of `make all`.  If libfuse is not found, it is silently skipped.
+
+### Usage
+
+The emlog kernel module must be loaded before starting `emlog_fuse`.
+
+```bash
+# Basic usage (root)
+sudo emlog_fuse /var/log/myapp
+
+# Custom buffer size (256 KB per file)
+sudo emlog_fuse /var/log/myapp -o buffer_size=256
+
+# Set file ownership by username (resolves uid and gid from passwd)
+sudo emlog_fuse /var/log/myapp -o user=myapp
+
+# Set file ownership by numeric uid/gid
+sudo emlog_fuse /var/log/myapp -o uid=1000,gid=1000
+
+# Unmount
+sudo fusermount -u /var/log/myapp
+```
+
+### Non-root usage
+
+`emlog_fuse` requires `CAP_MKNOD` to create emlog device nodes.
+`CAP_CHOWN` is also needed if file ownership differs from the
+running user.  Grant capabilities with:
+```bash
+sudo setcap 'cap_mknod,cap_chown+ep' ./emlog_fuse
+./emlog_fuse /var/log/myapp -o user=myapp
+```
+
+### Options
+
+| Option | Description |
+|---|---|
+| `-o buffer_size=N` | Buffer size per file in KB (default: 128) |
+| `-o dev_dir=PATH` | Directory for backing device files (default: `/dev/.emlog_fuse_devs`) |
+| `-o uid=UID` | UID or username for file ownership |
+| `-o gid=GID` | GID or group name for file ownership |
+| `-o user=NAME` | Sets both uid and gid from passwd entry |
+| `--allow-other` | Force enable FUSE `allow_other` |
+| `--no-allow-other` | Force disable FUSE `allow_other` |
+| `-d` | FUSE debug mode (verbose output) |
+
+When `uid` is set to a non-root user, `allow_other` is enabled
+automatically so that the specified user can access the mount.
+
+### How it works
+
+When a file is created or opened under the mount point, `emlog_fuse`
+creates a character device node (via `mknod`) backed by the emlog
+kernel module.  All writes to the FUSE file are forwarded to this
+device.  Reads return the current buffer contents (non-blocking).
+When all file descriptors for a file are closed, the backing device
+is automatically removed.
 
 
 Emlog and devtmpfs

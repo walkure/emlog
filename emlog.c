@@ -82,7 +82,7 @@
 
 #include "emlog.h"
 
-static bool emlog_autofree;
+static bool emlog_autofree = true;
 static bool emlog_debug;
 static int emlog_max_size = 1024;
 static dev_t emlog_dev_type = 0;

@@ -73,6 +73,8 @@ struct emlog_file {
     int      wfd;            /* shared write fd, -1 if closed */
     int      refcount;
     time_t   created_at;
+    uid_t    owner_uid;      /* uid of the process that created this file */
+    gid_t    owner_gid;      /* gid of the process that created this file */
 };
 
 struct fh_entry {
@@ -338,14 +340,20 @@ static int ensure_device(const char *name)
         return -EIO;
     }
 
-    if (chown(ef->dev_path, g_file_uid, g_file_gid) < 0)
+    struct fuse_context *fc = fuse_get_context();
+    uid_t owner_uid = fc ? fc->uid : g_file_uid;
+    gid_t owner_gid = fc ? fc->gid : g_file_gid;
+
+    if (chown(ef->dev_path, owner_uid, owner_gid) < 0)
         syslog(LOG_WARNING, "chown %s to %d:%d failed: %s",
-               ef->dev_path, g_file_uid, g_file_gid, strerror(errno));
+               ef->dev_path, owner_uid, owner_gid, strerror(errno));
 
     strncpy(ef->name, name, NAME_MAX);
     ef->name[NAME_MAX] = '\0';
     ef->refcount   = 0;
     ef->created_at = time(NULL);
+    ef->owner_uid  = owner_uid;
+    ef->owner_gid  = owner_gid;
     ef->used       = 1;
 
     syslog(LOG_INFO, "created: name='%s' dev='%s'", ef->name, ef->dev_path);
@@ -428,8 +436,8 @@ static int emfuse_getattr(const char *path, struct stat *stbuf)
     stbuf->st_mode  = S_IFREG | 0644;
     stbuf->st_nlink = 1;
     stbuf->st_size  = 0;
-    stbuf->st_uid   = g_file_uid;
-    stbuf->st_gid   = g_file_gid;
+    stbuf->st_uid   = ef->owner_uid;
+    stbuf->st_gid   = ef->owner_gid;
     stbuf->st_atime = ef->created_at;
     stbuf->st_mtime = ef->created_at;
     stbuf->st_ctime = ef->created_at;
@@ -997,7 +1005,8 @@ int main(int argc, char *argv[])
     else
         allow_other = (g_file_uid != 0);
 
-    int needs_chown = (g_file_uid != (uid_t)geteuid() ||
+    int needs_chown = allow_other ||
+                      (g_file_uid != (uid_t)geteuid() ||
                        g_file_gid != (gid_t)getegid());
 
     /* --- mountpoint --- */

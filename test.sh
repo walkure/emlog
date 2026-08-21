@@ -1,17 +1,8 @@
 #!/bin/bash
-echo ---- making emlog and nbcat
-make
-make nbcat
-echo ---- inserting module
-insmod emlog.ko
-cat /proc/devices | grep emlog
-ls -la -tr /sys/class/emlog
-echo ---- testing module
-mknod testlog c 250 8
-echo "testing testlog."$RANDOM > testlog
-./nbcat testlog
-rm testlog
-echo ---- removing module
-rmmod emlog
-echo ---- dmesg out
-dmesg | tail
+#
+# Kept for backward compatibility (this used to be the only smoke test,
+# with a hardcoded major number that broke as soon as a different major
+# got assigned). The actual test now lives in test/, alongside the rest
+# of the regression suite added for the Finding 1-7 fixes -- see
+# test/PROCEDURE.md for details and how to run the others.
+exec "$(dirname "$0")/test/run_basic_smoke_test.sh" "$@"

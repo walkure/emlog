@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (kernel module + userspace tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kernel headers and FUSE/libcap dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "linux-headers-$(uname -r)" libfuse-dev libcap-dev
+
+      - name: make
+        run: make
+
+      - name: Verify build outputs
+        run: |
+          test -f emlog.ko
+          test -x nbcat
+          test -x mkemlog
+          test -x emlog_stat
+          test -x emlog_fuse
+          modinfo ./emlog.ko
+
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: emlog-build-${{ github.sha }}
+          path: |
+            emlog.ko
+            nbcat
+            mkemlog
+            emlog_stat
+            emlog_fuse
+          if-no-files-found: error
+
+  smoke-test:
+    name: Smoke test (insmod / mknod / read-write / rmmod)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kernel headers and FUSE/libcap dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "linux-headers-$(uname -r)" libfuse-dev libcap-dev
+
+      - name: test/run_basic_smoke_test.sh
+        run: test/run_basic_smoke_test.sh

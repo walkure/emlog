@@ -54,3 +54,60 @@ jobs:
 
       - name: test/run_basic_smoke_test.sh
         run: test/run_basic_smoke_test.sh
+
+  build-tools:
+    name: Build userspace tools (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Standard Debian multiarch: covers everything from a generic
+          # x86_64 host up through Pi 2/3/4/5 and Zero 2 W (32- or
+          # 64-bit userland).
+          - name: amd64
+            platform: linux/amd64
+            image: debian:bullseye-slim
+          - name: arm64
+            platform: linux/arm64
+            image: debian:bullseye-slim
+          - name: armv7-armhf
+            platform: linux/arm/v7
+            image: debian:bullseye-slim
+          # Debian's own armhf targets ARMv7+; the original Pi
+          # Zero/Zero W/Pi 1 are ARMv6 and need Raspberry Pi OS's own
+          # ARMv6-baseline armhf toolchain instead, which balenalib's
+          # rpi-raspbian image mirrors (there's no official Debian
+          # ARMv6 hard-float port to build against).
+          - name: armv6-raspbian
+            platform: linux/arm/v6
+            image: balenalib/rpi-raspbian:bullseye
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Build nbcat/mkemlog/emlog_stat/emlog_fuse in ${{ matrix.image }} (${{ matrix.platform }})
+        run: |
+          docker run --rm --platform=${{ matrix.platform }} \
+            -v "$PWD":/src -w /src \
+            ${{ matrix.image }} \
+            bash -c '
+              set -eux
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential pkg-config libfuse-dev libcap-dev
+              make nbcat mkemlog emlog_stat emlog_fuse
+            '
+
+      - name: Rename outputs with arch suffix
+        run: |
+          mkdir -p out
+          for f in nbcat mkemlog emlog_stat emlog_fuse; do
+            cp "$f" "out/${f}-${{ matrix.name }}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emlog-tools-${{ matrix.name }}-${{ github.sha }}
+          path: out/
+          if-no-files-found: error

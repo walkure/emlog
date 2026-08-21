@@ -68,6 +68,8 @@
 
 struct emlog_file {
     int      used;
+    int      unlinked;       /* name removed but still open; hidden from lookups,
+                                 kept alive (and its slot reserved) until refcount hits 0 */
     char     name[NAME_MAX + 1];
     char     dev_path[PATH_MAX];
     int      wfd;            /* shared write fd, -1 if closed */
@@ -264,7 +266,8 @@ static void build_dev_prefix(const char *mountpoint)
 static int find_file(const char *name)
 {
     for (int i = 0; i < MAX_FILES; i++) {
-        if (g_files[i].used && strcmp(g_files[i].name, name) == 0)
+        if (g_files[i].used && !g_files[i].unlinked &&
+            strcmp(g_files[i].name, name) == 0)
             return i;
     }
     return -1;
@@ -391,7 +394,8 @@ static void cleanup_file(int idx)
     if (stat(ef->dev_path, &st) == 0)
         unlink(ef->dev_path);
 
-    ef->used = 0;
+    ef->used     = 0;
+    ef->unlinked = 0;
     syslog(LOG_INFO, "cleanup complete for '%s'", ef->name);
 }
 
@@ -463,7 +467,7 @@ static int emfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < MAX_FILES; i++) {
-        if (g_files[i].used)
+        if (g_files[i].used && !g_files[i].unlinked)
             filler(buf, g_files[i].name, NULL, 0);
     }
     pthread_mutex_unlock(&g_lock);
@@ -678,7 +682,15 @@ static int emfuse_release(const char *path, struct fuse_file_info *fi)
     ef->refcount--;
     syslog(LOG_INFO, "release: '%s' refcount -> %d", ef->name, ef->refcount);
 
-    if (ef->refcount <= 0)
+    /* Closing the last handle must NOT destroy the buffer: emlog buffers
+     * persist across close by design (see the kernel module's own
+     * "buffers are persistent, even after a process closes the emlog
+     * device" semantics), so a later open() of the same name should see
+     * the same history. wfd is deliberately left open so the buffer
+     * stays referenced. Only actually tear it down once the name has
+     * been removed via unlink()/rename()-replace *and* the last handle
+     * on it is gone. */
+    if (ef->unlinked && ef->refcount <= 0)
         cleanup_file(file_idx);
 
     pthread_mutex_unlock(&g_lock);
@@ -726,7 +738,22 @@ static int emfuse_unlink(const char *path)
         pthread_mutex_unlock(&g_lock);
         return -ENOENT;
     }
-    cleanup_file(idx);
+
+    struct emlog_file *ef = &g_files[idx];
+    if (ef->refcount > 0) {
+        /* still open elsewhere: hide the name (find_file/readdir will
+         * skip it) but keep the slot and backing device reserved for
+         * this file until the last open handle is released via
+         * emfuse_release(), matching POSIX unlink-while-open semantics.
+         * This also prevents a later create() of a same-named file from
+         * ever sharing this (soon-to-be-stale) slot with the handles
+         * still open on it. */
+        ef->unlinked = 1;
+        syslog(LOG_INFO, "unlink('%s'): deferred, refcount=%d",
+               name, ef->refcount);
+    } else {
+        cleanup_file(idx);
+    }
     pthread_mutex_unlock(&g_lock);
     return 0;
 }
@@ -743,6 +770,23 @@ static int emfuse_rename(const char *from, const char *to)
         pthread_mutex_unlock(&g_lock);
         return -ENOENT;
     }
+
+    /* if the destination name already refers to a different file,
+     * replace it the way POSIX rename() does: drop that name, deferring
+     * actual cleanup if it's still open (same as unlink()), instead of
+     * leaving it permanently unreachable-but-alive. */
+    int target_idx = find_file(new_name);
+    if (target_idx >= 0 && target_idx != idx) {
+        struct emlog_file *tf = &g_files[target_idx];
+        if (tf->refcount > 0) {
+            tf->unlinked = 1;
+            syslog(LOG_INFO, "rename: replaced '%s' deferred, refcount=%d",
+                   new_name, tf->refcount);
+        } else {
+            cleanup_file(target_idx);
+        }
+    }
+
     strncpy(g_files[idx].name, new_name, NAME_MAX);
     g_files[idx].name[NAME_MAX] = '\0';
     pthread_mutex_unlock(&g_lock);

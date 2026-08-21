@@ -10,7 +10,7 @@
 KVER ?= $(shell uname -r)
 KDIR ?= /lib/modules/$(KVER)/build
 MDIR := emlog
-MVER := 0.71
+MVER := 0.72
 
 DKMS ?= dkms
 

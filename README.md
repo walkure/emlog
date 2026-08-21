@@ -1,7 +1,7 @@
 emlog -- the EMbedded-system LOG-device
 =======================================
 
-Version 0.71, 21 August 2026
+Version 0.72, 21 August 2026
 
 Author:   Jeremy Elson <jelson@circlemud.org><br/>
 Web page:
@@ -186,7 +186,7 @@ How is emlog used?
 
    If successful, a message similar to
    ```
-   emlog:emlog_init: version 0.71 running, major is 251, MINOR is 1, max size 1024 K.
+   emlog:emlog_init: version 0.72 running, major is 251, MINOR is 1, max size 1024 K.
    ```
    should show up in your kernel log (type `dmesg` to see it).
    You can also verify that the module has been inserted by
@@ -539,6 +539,21 @@ Services Form 27B/6, are welcomed at [Emlog github page](https://github.com/nicu
 
 Version History
 ===============
+### Version 0.72 (August 21, 2026) -- [walkure/emlog](https://github.com/walkure/emlog) fork
+ - Fix `class_create()`/`device_create()` failure detection in
+   `emlog_init()`: both were checked against `NULL`, but modern kernel
+   APIs return `ERR_PTR()` (a non-NULL, error-encoded pointer) on
+   failure, so a real failure (e.g. the sysfs-duplicate-filename case
+   fixed in 0.71) was silently reported as a successful module load.
+   Found while deploying to a second device (a Raspberry Pi Zero 2 W).
+ - Document installing via DKMS (recommended for weak/microSD boards
+   like the Pi Zero) and building on Raspberry Pi OS in general.
+ - Add a GitHub Actions CI workflow: build + smoke test on every push,
+   plus cross-compiled `nbcat`/`mkemlog`/`emlog_stat`/`emlog_fuse`
+   binaries for amd64/arm64/armv7(armhf)/armv6(original Pi
+   Zero/Zero W/Pi 1, via a Raspberry Pi OS-based toolchain) attached to
+   GitHub Releases on tags.
+
 ### Version 0.71 (August 21, 2026) -- [walkure/emlog](https://github.com/walkure/emlog) fork
  - Add `emlog_fuse`: a FUSE filesystem that transparently backs regular
    files with emlog circular-buffer devices.

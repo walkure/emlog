@@ -11,4 +11,9 @@ modules.order
 Module.symvers
 nbcat
 mkemlog
+emlog_stat
+emlog_fuse
+emlog.mod
 emlog.ko.unsigned
+NOTES.md
+test/stress_open_close

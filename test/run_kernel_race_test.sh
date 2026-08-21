@@ -54,7 +54,7 @@ echo "emlog major = $MAJOR"
 sudo mknod "$DEV" c "$MAJOR" 8
 sudo chmod 666 "$DEV"
 
-DMESG_BEFORE=$(dmesg | wc -l)
+DMESG_BEFORE=$(sudo dmesg | wc -l)
 
 echo "== stress: $WORKERS workers x $ITERS open+write+close cycles each =="
 pids=()
@@ -69,7 +69,7 @@ for pid in "${pids[@]}"; do
 done
 
 echo "== checking dmesg for new kernel errors =="
-NEW_LOG=$(dmesg | tail -n "+$((DMESG_BEFORE + 1))")
+NEW_LOG=$(sudo dmesg | tail -n "+$((DMESG_BEFORE + 1))")
 if echo "$NEW_LOG" | grep -Ei 'BUG:|Oops|WARNING:|general protection fault|Unable to handle kernel|KASAN|kernel panic'; then
     echo "$NEW_LOG"
     echo "!! kernel logged something during the stress run (see above) !!"

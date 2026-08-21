@@ -31,7 +31,7 @@ if lsmod | grep -q '^emlog '; then
     exit 1
 fi
 
-DMESG_BEFORE=$(dmesg | wc -l)
+DMESG_BEFORE=$(sudo dmesg | wc -l)
 
 echo "== loading module =="
 sudo insmod ./emlog.ko
@@ -92,7 +92,7 @@ fi
 sudo rm -f "$DEV"
 
 echo "== checking dmesg for anything unexpected during the run =="
-NEW_LOG=$(dmesg | tail -n "+$((DMESG_BEFORE + 1))")
+NEW_LOG=$(sudo dmesg | tail -n "+$((DMESG_BEFORE + 1))")
 echo "$NEW_LOG"
 if echo "$NEW_LOG" | grep -Ei 'BUG:|Oops|WARNING:|general protection fault|Unable to handle kernel|KASAN|kernel panic'; then
     echo "!! kernel logged something unexpected (see above) !!"

@@ -191,6 +191,38 @@ static void destroy_einfo(struct emlog_info *einfo)
     kfree(einfo);
 }
 
+/* drop one reference to einfo.  if it reaches zero and either autofree
+ * is set or the buffer is empty, detach it from the list and free it.
+ * must be called without emlog_list_lock held.  the caller must already
+ * hold a reference to einfo (i.e. einfo->refcount must be >= 1 on entry),
+ * so einfo itself cannot have been freed by someone else in the meantime. */
+static void put_einfo(struct emlog_info *einfo)
+{
+    struct emlog_info *to_free = NULL;
+
+    spin_lock(&emlog_list_lock);
+    einfo->refcount--;
+
+    /* if no one has this file open and it's not holding any data, or
+     * autofree is set, delete the record. */
+    if (einfo->refcount == 0) {
+        int qlen;
+        /* check buffer length under read lock */
+        read_lock(&einfo->rwlock);
+        qlen = EMLOG_QLEN(einfo);
+        read_unlock(&einfo->rwlock);
+
+        if (emlog_autofree || qlen == 0) {
+            detach_einfo(einfo);
+            to_free = einfo;
+        }
+    }
+    spin_unlock(&emlog_list_lock);
+
+    if (to_free)
+        destroy_einfo(to_free);
+}
+
 /************************ File Interface Functions ************************/
 
 static int emlog_open(struct inode *inode, struct file *file)
@@ -199,8 +231,14 @@ static int emlog_open(struct inode *inode, struct file *file)
     struct emlog_info *einfo;
     struct emlog_info *new_einfo = NULL;
 
+    /* look up and take a reference in the same critical section: taking
+     * the reference is what keeps einfo alive afterwards, so it must
+     * not be dropped and re-acquired in between (that would let a
+     * concurrent emlog_release() free einfo out from under us). */
     spin_lock(&emlog_list_lock);
     einfo = get_einfo(inode);
+    if (einfo != NULL)
+        einfo->refcount++;
     spin_unlock(&emlog_list_lock);
 
     if (einfo == NULL) {
@@ -224,17 +262,11 @@ static int emlog_open(struct inode *inode, struct file *file)
         /* if we lost the race, free our unused allocation */
         if (new_einfo != NULL)
             destroy_einfo(new_einfo);
-    } else {
-        spin_lock(&emlog_list_lock);
-        einfo->refcount++;
-        spin_unlock(&emlog_list_lock);
     }
 
     if (!try_module_get(THIS_MODULE)) {
         pr_err("cannot get module\n");
-        spin_lock(&emlog_list_lock);
-        einfo->refcount--;
-        spin_unlock(&emlog_list_lock);
+        put_einfo(einfo);
         return -ENODEV;
     }
     return 0;
@@ -244,37 +276,21 @@ static int emlog_open(struct inode *inode, struct file *file)
 static int emlog_release(struct inode *inode, struct file *file)
 {
     struct emlog_info *einfo;
-    struct emlog_info *to_free = NULL;
 
+    /* this file's own open() holds a reference, so einfo is guaranteed
+     * to still be alive here even though we look it up without holding
+     * emlog_list_lock continuously. */
     spin_lock(&emlog_list_lock);
     einfo = get_einfo(inode);
+    spin_unlock(&emlog_list_lock);
+
     if (einfo == NULL) {
-        spin_unlock(&emlog_list_lock);
         pr_err("can not fetch einfo for inode %ld.\n", inode->i_ino);
         module_put(THIS_MODULE);
         return EIO;
     }
 
-    einfo->refcount--;
-
-    /* decrement the reference count.  if no one has this file open and
-     * it's not holding any data or if autofree is set, delete the record. */
-    if (einfo->refcount == 0) {
-        int qlen;
-        /* check buffer length under read lock */
-        read_lock(&einfo->rwlock);
-        qlen = EMLOG_QLEN(einfo);
-        read_unlock(&einfo->rwlock);
-        
-        if (emlog_autofree || qlen == 0) {
-            detach_einfo(einfo);
-            to_free = einfo;
-        }
-    }
-    spin_unlock(&emlog_list_lock);
-
-    if (to_free)
-        destroy_einfo(to_free);
+    put_einfo(einfo);
 
     module_put(THIS_MODULE);
     return 0;

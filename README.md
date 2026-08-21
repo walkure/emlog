@@ -124,11 +124,20 @@ How is emlog used?
    This registers the source under `/usr/src/emlog-<version>/`, builds
    it against the running kernel, and installs it so `modprobe emlog`
    (and `modprobe -r emlog`) work like any other kernel module --
-   verified end to end on a Raspberry Pi 4 (build, `modprobe`,
-   `/dev/emlog` appearing, `emlog_stat` querying it, clean
-   `modprobe -r`). With `AUTOINSTALL="yes"` in `dkms.conf`, a future
-   `apt upgrade` that installs a new kernel will trigger DKMS to rebuild
-   emlog for it automatically.
+   verified end to end on both a Raspberry Pi 4 and a Raspberry Pi Zero
+   2 W (build, `modprobe`, `/dev/emlog` appearing, `emlog_stat` querying
+   it, several clean `modprobe`/`rmmod` cycles). With `AUTOINSTALL="yes"`
+   in `dkms.conf`, a future `apt upgrade` that installs a new kernel
+   will trigger DKMS to rebuild emlog for it automatically.
+
+   **DKMS only covers `emlog.ko`.** `dkms.conf`'s `BUILT_MODULE_NAME[]`
+   names just the kernel module, and `make dkms_install` drives the
+   kernel's own out-of-tree module build (`make -C <kernel build dir>
+   M=<source dir>`), not this project's top-level `Makefile` -- so
+   `nbcat`, `mkemlog`, `emlog_stat`, and `emlog_fuse` are *not* built or
+   kept up to date by DKMS, including on the automatic kernel-upgrade
+   rebuild. Build/install those the normal way (`make` / `make install`,
+   see step 1) independently of `dkms_install`.
 
    For a small/weak board like a Pi Zero, this means the (small,
    single-file) module gets compiled natively on first install and

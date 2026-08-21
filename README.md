@@ -95,6 +95,17 @@ How is emlog used?
    modprobe emlog emlog_max_size=2048
    ```
 
+   By default (`emlog_autofree=1`), a device's buffer is freed as soon
+   as no process has it open anymore -- so data does *not* survive
+   across separate open/close sessions unless something already has
+   the device open when the buffer would otherwise be freed. Load with
+   `emlog_autofree=0` if you want buffers to persist across opens (the
+   traditional emlog behavior; see step 4 and "Other Usage Notes"
+   below for what this means in practice):
+   ```bash
+   modprobe emlog emlog_autofree=0
+   ```
+
    If successful, a message similar to
    ```
    emlog:emlog_init: version 0.70 running, major is 251, MINOR is 1, max size 1024 K.
@@ -178,13 +189,29 @@ How is emlog used?
    Writes to the log will never block because the buffer never runs
    out of space; old data is simply overwritten by new data.
 
-   You can read from the log in the normal way, e.g. using cat.  By
-   default, reads block, just like `tail -f`, waiting for new log
-   data.  For example:
+   **A word of caution**: with the default `emlog_autofree=1`, the
+   buffer above is freed the instant `echo`'s shell redirection closes
+   the file -- so a *separate*, later `cat /tmp/testlog` command (in a
+   new process, after `echo` has already exited) will see an empty,
+   freshly-allocated buffer, not "hello". To see data survive across
+   separate opens like this, load the module with `emlog_autofree=0`
+   (step 2) first.
+
+   With the default settings, the way to see this in action is to
+   start the reader *before* the writer closes -- e.g. start `cat`
+   first in one terminal:
    ```bash
    cat /tmp/testlog
-   hello  [we immediately see the hello that we wrote in the previous step]
-   _      [... and here's the cursor.  the 'cat' process is now
+   _      [blocked, waiting for data -- just like tail -f]
+   ```
+   ...then, in another terminal:
+   ```bash
+   echo hello > /tmp/testlog
+   ```
+   ...and the first terminal immediately shows:
+   ```
+   hello  [we see the hello that was just written]
+   _      [... and here's the cursor.  the 'cat' process is still
            blocked, waiting for new input.  New data will be displayed
            as it is written to the device by other processes.]
    ^C     [use control-c, for example, to stop reading.]
@@ -214,11 +241,16 @@ if one of the following two conditions is true:
   1.  A process has the file open for reading or writing
   2.  A process has written text to the pipe
 
-In other words, buffers are persistent, even after a process closes
-the emlog device.  Therefore, it is possible (naturally) to fill
-virtual memory by creating many large emlog devices and writing one
-byte to all of them.  Don't do that.  All buffers will be freed when
-the emlog kernel module is removed.
+Whether the buffer survives after the *last* process closes the
+device depends on the `emlog_autofree` module parameter (see step 2):
+with the default `emlog_autofree=1`, the buffer is freed as soon as
+no process has it open anymore. Load the module with
+`emlog_autofree=0` if you want buffers to persist across opens (the
+traditional emlog behavior) -- in that case, it's possible (naturally)
+to fill virtual memory by creating many large emlog devices and
+writing one byte to all of them. Don't do that. Regardless of
+`emlog_autofree`, all buffers are freed when the emlog kernel module
+is removed.
 
 * Non-blocking reads work; i.e., setting O_NONBLOCK using ioctl()
 will cause an EAGAIN to be returned if there is no data ready.  In
@@ -405,10 +437,22 @@ A:  Sorry.  If you can reproduce the problem I'll try to fix it.
 
 Known Bugs
 ==========
- * [Racy einfo allocation/destruction](https://github.com/nicupavel/emlog/issues/10).
-   This may cause memory leaks or crashes during concurrent opening of _new_ emlog buffers,
-   or concurrent closing/opening of an emlog device.
-   (when loaded with `emlog_autofree=1` (defaults to off))
+ * ~~[Racy einfo allocation/destruction](https://github.com/nicupavel/emlog/issues/10)~~ --
+   fixed in this fork. `emlog_open()` used to look up an existing
+   einfo, drop the list lock, and only then take a reference; a
+   concurrent `emlog_release()` closing the last other fd (freeing the
+   einfo, since `emlog_autofree` now defaults to `1`) in that window
+   caused a use-after-free. The lookup and reference-taking are now a
+   single atomic critical section.
+ * [sysfs "cannot create duplicate filename" on module reload](https://github.com/nicupavel/emlog/issues/12) --
+   fixed in this fork. `emlog_remove()` was calling `device_destroy()`
+   with the wrong `dev_t` (the chrdev region's base minor rather than
+   the minor `/dev/emlog` was actually `device_create()`'d with), so
+   the device's sysfs entry was never actually removed on unload,
+   causing every subsequent `insmod` to fail with `-EEXIST`. Once
+   triggered on an unpatched module, the only recovery is a reboot (or
+   kexec) -- reloading a patched module afterwards does not retroactively
+   clean up the already-leaked sysfs entry from an earlier, unpatched load.
 
 
 Bug reports, patches, complaints, praise, and submissions of Central

@@ -76,6 +76,36 @@ How is emlog used?
    make install
    ```
 
+#### Building on Raspberry Pi OS
+
+   emlog's whole reason for existing -- a fixed-size log buffer that
+   never grows -- is squarely aimed at boards like the Raspberry Pi that
+   boot off a microSD card, where you don't want an ordinary log file
+   slowly wearing out or filling the card. On Raspberry Pi OS (Debian-based,
+   arm64, running the Raspberry Pi Foundation's own kernel rather than a
+   generic Debian one) you need the *matching* kernel headers package,
+   not Debian's `linux-headers-$(uname -r)`:
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y raspberrypi-kernel-headers libfuse-dev libcap-dev
+   ```
+   - `raspberrypi-kernel-headers` comes from the `archive.raspberrypi.org`
+     apt source (present by default on Raspberry Pi OS as
+     `/etc/apt/sources.list.d/raspi.list`) and must be the same version as
+     the currently-running `raspberrypi-kernel` package, since `make`
+     builds against `/lib/modules/$(uname -r)/build`. If `insmod` refuses
+     the module with "Invalid module format" afterwards, check
+     `dmesg` for a `vermagic`/`disagrees about version of symbol
+     module_layout` message -- that means the headers and running kernel
+     drifted apart (e.g. after a `apt upgrade` that pulled a new kernel
+     without rebooting into it yet), not a problem with emlog itself.
+   - `libfuse-dev` (not `libfuse3-dev`) and `libcap-dev` are only needed
+     if you want `emlog_fuse` (see below); everything else builds without
+     them.
+
+   Once those are installed, plain `make` (no `KDIR`/`KVER` override
+   needed) builds everything, exactly as above.
+
 
 ### 2: Load the emlog module into the kernel
 

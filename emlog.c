@@ -87,6 +87,12 @@ static bool emlog_autofree = true;
 static bool emlog_debug;
 static int emlog_max_size = 1024;
 static dev_t emlog_dev_type = 0;
+/* dev_t of the default /dev/emlog device_create()'d below; NOT the same
+ * as emlog_dev_type (which carries EMLOG_MINOR_BASE's minor, 1, from
+ * alloc_chrdev_region). device_destroy() must be called with the exact
+ * devt that was passed to device_create(), so this is tracked
+ * separately and reused for teardown. */
+static dev_t emlog_default_dev = 0;
 
 static struct cdev *emlog_cdev = NULL;
 static struct class *emlog_class = NULL;
@@ -608,7 +614,12 @@ static int __init emlog_init(void)
         ret_val = -4; goto emlog_init_error;
     }
 
-    emlog_dev_reg = device_create(emlog_class, NULL, MKDEV(MAJOR(emlog_dev_type), 256), NULL, DEVICE_NAME );
+    /* /dev/emlog defaults to a 256K buffer, but the registered minor
+     * range is only [EMLOG_MINOR_BASE, EMLOG_MINOR_BASE + emlog_minor_count - 1];
+     * clamp down so /dev/emlog stays openable when the module is loaded
+     * with emlog_max_size < 256. */
+    emlog_default_dev = MKDEV(MAJOR(emlog_dev_type), min(256, emlog_max_size));
+    emlog_dev_reg = device_create(emlog_class, NULL, emlog_default_dev, NULL, DEVICE_NAME );
     if (emlog_dev_reg == NULL) {
         pr_err("Can not device_create.\n");
         ret_val = -5; goto emlog_init_error;
@@ -616,7 +627,14 @@ static int __init emlog_init(void)
 
     goto emlog_init_okay;
   emlog_init_error:
-    if (emlog_dev_reg) device_destroy(emlog_class, emlog_dev_type);
+    /* device_destroy() must be given the exact devt device_create() was
+     * called with (emlog_default_dev), NOT emlog_dev_type -- those differ
+     * (see the comment on emlog_default_dev's declaration). Passing the
+     * wrong one silently no-ops, leaking the sysfs device entry and
+     * making the next insmod fail with "sysfs: cannot create duplicate
+     * filename" (kobject -EEXIST) -- this was reproduced live on this
+     * host and matches upstream issue #12. */
+    if (emlog_dev_reg) device_destroy(emlog_class, emlog_default_dev);
     if (emlog_class) class_destroy(emlog_class);
     if (emlog_cdev) cdev_del(emlog_cdev);
     if (emlog_dev_type) unregister_chrdev_region(emlog_dev_type, emlog_minor_count);
@@ -640,7 +658,8 @@ static void __exit emlog_remove(void)
     }
     spin_unlock(&emlog_list_lock);
 
-    device_destroy(emlog_class, emlog_dev_type);
+    /* see the comment above the matching call in emlog_init_error */
+    device_destroy(emlog_class, emlog_default_dev);
     class_destroy(emlog_class);
     cdev_del(emlog_cdev);
     unregister_chrdev_region(emlog_dev_type, emlog_max_size /* aka emlog_minor_count */);

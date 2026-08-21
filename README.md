@@ -1,6 +1,8 @@
 emlog -- the EMbedded-system LOG-device
 =======================================
 
+*[日本語版](README.ja.md)*
+
 Version 0.72, 21 August 2026
 
 Author:   Jeremy Elson <jelson@circlemud.org><br/>

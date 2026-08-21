@@ -1,12 +1,13 @@
 emlog -- the EMbedded-system LOG-device
 =======================================
 
-Version 0.70, 10 July 2018
+Version 0.71, 21 August 2026
 
 Author:   Jeremy Elson <jelson@circlemud.org><br/>
 Web page:
 * http://www.circlemud.org/~jelson/software/emlog
 * https://github.com/nicupavel/emlog
+* https://github.com/walkure/emlog (this fork)
 
 --------------------------------------------------------------------------
 
@@ -138,7 +139,7 @@ How is emlog used?
 
    If successful, a message similar to
    ```
-   emlog:emlog_init: version 0.70 running, major is 251, MINOR is 1, max size 1024 K.
+   emlog:emlog_init: version 0.71 running, major is 251, MINOR is 1, max size 1024 K.
    ```
    should show up in your kernel log (type `dmesg` to see it).
    You can also verify that the module has been inserted by
@@ -491,6 +492,31 @@ Services Form 27B/6, are welcomed at [Emlog github page](https://github.com/nicu
 
 Version History
 ===============
+### Version 0.71 (August 21, 2026) -- [walkure/emlog](https://github.com/walkure/emlog) fork
+ - Add `emlog_fuse`: a FUSE filesystem that transparently backs regular
+   files with emlog circular-buffer devices.
+ - Add an ioctl interface (`EMLOG_GET_STATUS`) and the `emlog_stat`
+   utility for querying buffer size, data length, total bytes written,
+   and open-fd refcount.
+ - Set `emlog_autofree` to default to `1` (was `0`); see "Other Usage
+   Notes" and step 2 above for what this means for buffer persistence.
+ - Allow specifying device ownership (uid/gid) on device creation.
+ - Fix a kernel use-after-free in `emlog_open()`: looking up an existing
+   einfo and taking a reference to it were two separate critical
+   sections, letting a concurrent `emlog_release()` free it in between
+   ([upstream issue #10](https://github.com/nicupavel/emlog/issues/10)).
+ - Fix `device_destroy()` being called with the wrong `dev_t`, which
+   silently failed to remove `/dev/emlog`'s sysfs entry on unload and
+   made every subsequent `insmod` fail with `-EEXIST`
+   ([upstream issue #12](https://github.com/nicupavel/emlog/issues/12)).
+ - Fix `/dev/emlog` being unopenable (`-ENXIO`) when loaded with
+   `emlog_max_size` below 256.
+ - Fix `emlog_fuse` destroying a file's buffer on ordinary close instead
+   of only on unlink/replace, and a stale open handle being able to leak
+   data into an unrelated file after unlink or rename.
+ - Fix `emlog_stat` always exiting `0` even when every query failed.
+ - Add a regression test suite under `test/` (see `test/PROCEDURE.md`).
+
 ### Version 0.70 (July 10, 2018)
  - Change the default size of /dev/emlog from 1KB to 256KB.
  - Allow emlog devices to be up to 1MB large.

@@ -17,7 +17,7 @@
  *
  * This code is released under the GPL
  *
- * This is emlog version 0.70, released 13 August 2001, modified 25 June 2018
+ * This is emlog version 0.71, released 13 August 2001, modified 21 August 2026
  * For more information see http://www.circlemud.org/~jelson/software/emlog
  * and https://github.com/nicupavel/emlog
  *

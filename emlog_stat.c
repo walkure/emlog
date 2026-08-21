@@ -19,10 +19,13 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    int had_error = 0;
+
     for (int i = 1; i < argc; i++) {
         int fd = open(argv[i], O_RDONLY | O_NONBLOCK);
         if (fd < 0) {
             perror(argv[i]);
+            had_error = 1;
             continue;
         }
 
@@ -30,6 +33,7 @@ int main(int argc, char *argv[])
         if (ioctl(fd, EMLOG_GET_STATUS, &st) < 0) {
             perror("ioctl EMLOG_GET_STATUS");
             close(fd);
+            had_error = 1;
             continue;
         }
         close(fd);
@@ -41,5 +45,5 @@ int main(int argc, char *argv[])
         printf("  total written : %llu bytes\n", (unsigned long long)st.total_written);
         printf("  refcount      : %d\n", st.refcount);
     }
-    return 0;
+    return had_error ? 1 : 0;
 }

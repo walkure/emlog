@@ -609,8 +609,13 @@ static int __init emlog_init(void)
 #else
     emlog_class = class_create(DEVICE_NAME);
 #endif
-    if (emlog_class == NULL) {
-        pr_err("Can not class_create.\n");
+    /* class_create() returns ERR_PTR() (not NULL) on failure -- checking
+     * against NULL here never caught a real failure, silently treating
+     * an errored-out emlog_class as success and later dereferencing/
+     * passing that error-encoded pointer around as if valid. */
+    if (IS_ERR(emlog_class)) {
+        pr_err("Can not class_create, error code %ld.\n", PTR_ERR(emlog_class));
+        emlog_class = NULL;
         ret_val = -4; goto emlog_init_error;
     }
 
@@ -620,8 +625,18 @@ static int __init emlog_init(void)
      * with emlog_max_size < 256. */
     emlog_default_dev = MKDEV(MAJOR(emlog_dev_type), min(256, emlog_max_size));
     emlog_dev_reg = device_create(emlog_class, NULL, emlog_default_dev, NULL, DEVICE_NAME );
-    if (emlog_dev_reg == NULL) {
-        pr_err("Can not device_create.\n");
+    /* same ERR_PTR-vs-NULL mistake as class_create() above: this used to
+     * check `== NULL`, so a genuine device_create() failure (e.g. the
+     * sysfs "cannot create duplicate filename" EEXIST case from a
+     * leaked prior instance, see the device_destroy() fix below) was
+     * silently reported as a successful module load, leaving /dev/emlog
+     * in a broken state with no error surfaced to insmod/modprobe.
+     * Reproduced live: rmmod'ing an old, unpatched (pre-device_destroy-fix)
+     * module leaked its sysfs entry, and loading the patched module
+     * afterwards hit exactly this. */
+    if (IS_ERR(emlog_dev_reg)) {
+        pr_err("Can not device_create, error code %ld.\n", PTR_ERR(emlog_dev_reg));
+        emlog_dev_reg = NULL;
         ret_val = -5; goto emlog_init_error;
     }
 

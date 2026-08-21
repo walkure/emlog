@@ -107,6 +107,44 @@ How is emlog used?
    Once those are installed, plain `make` (no `KDIR`/`KVER` override
    needed) builds everything, exactly as above.
 
+#### Installing via DKMS (recommended for weak/microSD boards)
+
+   `insmod`'ing a `.ko` built elsewhere only works if its `vermagic`
+   exactly matches the target's running kernel -- a real problem for a
+   fleet of small boards (e.g. Raspberry Pi Zero) whose kernel versions
+   drift apart over time as they get updated independently. DKMS avoids
+   this by rebuilding the module *on the target itself* whenever it's
+   installed or the kernel is upgraded, so there's never a prebuilt
+   binary to go stale. This project ships a `dkms.conf`, so as long as
+   `dkms` and the matching kernel headers (see above) are installed:
+   ```bash
+   sudo apt-get install -y dkms
+   sudo make dkms_install
+   ```
+   This registers the source under `/usr/src/emlog-<version>/`, builds
+   it against the running kernel, and installs it so `modprobe emlog`
+   (and `modprobe -r emlog`) work like any other kernel module --
+   verified end to end on a Raspberry Pi 4 (build, `modprobe`,
+   `/dev/emlog` appearing, `emlog_stat` querying it, clean
+   `modprobe -r`). With `AUTOINSTALL="yes"` in `dkms.conf`, a future
+   `apt upgrade` that installs a new kernel will trigger DKMS to rebuild
+   emlog for it automatically.
+
+   For a small/weak board like a Pi Zero, this means the (small,
+   single-file) module gets compiled natively on first install and
+   again after each kernel upgrade -- slower than copying a prebuilt
+   `.ko`, but it never breaks from a version mismatch, which matters
+   more on boards you don't want to be SSH-ing into to debug a boot
+   failure.
+
+   To remove:
+   ```bash
+   sudo make dkms_remove
+   ```
+   Note this leaves `/usr/src/emlog-<version>/` behind (see the
+   commented-out line in the Makefile's `dkms_remove` target); remove it
+   manually if you want it gone too.
+
 
 ### 2: Load the emlog module into the kernel
 
